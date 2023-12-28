@@ -1,12 +1,10 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:shopping_list/data/categories.dart';
-import 'package:shopping_list/models/category.dart';
-import 'package:shopping_list/models/grocery_item.dart';
-import 'package:shopping_list/models/category.dart';
-import 'package:shopping_list/widgets/new_item.dart';
 import 'package:http/http.dart' as http;
+import 'package:shopping_list/data/categories.dart';
+import 'package:shopping_list/models/grocery_item.dart';
+import 'package:shopping_list/widgets/new_item.dart';
 
 class GroceryList extends StatefulWidget {
   const GroceryList({super.key});
@@ -16,77 +14,59 @@ class GroceryList extends StatefulWidget {
 }
 
 class _GroceryListState extends State<GroceryList> {
-  List<GroceryItem> _groceryItems =
-      []; // we want to re-assign the list in _loadItems
-  var _isLoading = true;
-  String? _error;
+  final List<GroceryItem> _groceryItems = [];
+  late Future<List<GroceryItem>> _loadedItems;
 
   @override
   void initState() {
     super.initState();
-    _loadItems();
+    _loadedItems = _loadItems();
   }
 
-  void _loadItems() async {
+  Future<List<GroceryItem>> _loadItems() async {
     final url = Uri.https(
       'flutter-shopping-list-fb3de-default-rtdb.firebaseio.com',
       'shopping-list.json',
     );
-    try {
-      final response = await http.get(url);
 
-      if (response.statusCode >= 400) {
-        final resBody = json.decode(response.body);
-        // If resBody has an 'error' key, then use that as the error message
-        var errorMessage = 'Failed to fetch items. Please try again later.';
+    final response = await http.get(url);
 
-        if (resBody.containsKey('error')) {
-          errorMessage = resBody['error'];
-        }
-
-        setState(() {
-          _error = errorMessage;
-        });
-      }
-
-      // IMPORTANT: In case of empty list, Firebase response will be null, so we need to check for that case.
-      if (response.body == 'null') {
-        setState(() {
-          _isLoading = false;
-        });
-        return;
-      }
-
-      final Map<String, dynamic> listData = json.decode(response.body);
-
-      final List<GroceryItem> loadedItems = [];
-
-      for (final item in listData.entries) {
-        final category = categories.entries
-            .firstWhere(
-              (catItem) => catItem.value.title == item.value['category'],
-            )
-            .value;
-
-        loadedItems.add(
-          GroceryItem(
-            id: item.key,
-            name: item.value['name'],
-            quantity: item.value['quantity'],
-            category: category,
-          ),
-        );
-      }
-
-      setState(() {
-        _groceryItems = loadedItems;
-        _isLoading = false;
-      });
-    } catch (error) {
-      setState(() {
-        _error = error.toString();
-      });
+    if (response.statusCode >= 400) {
+      final resBody = json.decode(response.body);
+      // If resBody has an 'error' key, then use that as the error message
+      var errorMessage =
+          resBody['error'] ?? 'Failed to fetch items. Please try again later.';
+      throw Exception(errorMessage); //to be caught by the FutureBuilder
     }
+
+    // IMPORTANT: In case of empty list, Firebase response will be null, so we need to check for that case.
+    if (response.body == 'null') {
+      // No need to manually set the _isLoading state.
+      return []; // return empty list because the _loadItems() method is expecting a List<GroceryItem>
+    }
+
+    final Map<String, dynamic> listData = json.decode(response.body);
+
+    final List<GroceryItem> loadedItems = [];
+
+    for (final item in listData.entries) {
+      final category = categories.entries
+          .firstWhere(
+            (catItem) => catItem.value.title == item.value['category'],
+          )
+          .value;
+
+      loadedItems.add(
+        GroceryItem(
+          id: item.key,
+          name: item.value['name'],
+          quantity: item.value['quantity'],
+          category: category,
+        ),
+      );
+    }
+
+    return loadedItems;
   }
 
   void _addItem() async {
@@ -136,60 +116,6 @@ class _GroceryListState extends State<GroceryList> {
 
   @override
   Widget build(BuildContext context) {
-    Widget content = const Center(
-      child: Text('No items added yet!'),
-    );
-
-    if (_isLoading) {
-      content = const Center(
-        child: CircularProgressIndicator(),
-      );
-    }
-
-    if (_groceryItems.isNotEmpty) {
-      content = ListView.builder(
-        itemCount: _groceryItems.length,
-        itemBuilder: (ctx, index) {
-          final item = _groceryItems[index];
-          return Dismissible(
-            onDismissed: (direction) {
-              _removeItem(_groceryItems[index]);
-            },
-            background: Container(
-              color: Theme.of(context).colorScheme.error,
-            ),
-            key: ValueKey(item.id),
-            child: ListTile(
-              leading: Container(
-                width: 24,
-                height: 24,
-                color: item.category.color,
-              ),
-              title: Text(item.name),
-              trailing: Text(
-                item.quantity.toString(),
-                style: const TextStyle(
-                  fontSize: 16,
-                ),
-              ),
-            ),
-          );
-        },
-      );
-    }
-
-    if (_error != null) {
-      content = Center(
-        child: Text(
-          _error!,
-          style: TextStyle(
-            fontSize: 18,
-            color: Theme.of(context).colorScheme.error,
-          ),
-        ),
-      );
-    }
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Your Groceries'),
@@ -200,7 +126,77 @@ class _GroceryListState extends State<GroceryList> {
           ),
         ],
       ),
-      body: content,
+      // don't pass _loadItems() directly to `future:` because this will call
+      //the API each time the build() method is re-executed.
+      body: FutureBuilder(
+        future: _loadedItems,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(
+              child: CircularProgressIndicator(),
+            );
+          }
+
+          if (snapshot.hasError) {
+            return Center(
+              child: Text(
+                snapshot.error.toString(),
+                style: TextStyle(
+                  fontSize: 18,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
+            );
+          }
+
+          // data won't be null if it reaches this point
+          if (snapshot.data!.isEmpty) {
+            return const Center(
+              child: Text('No items added yet!'),
+            );
+          }
+
+          // Sure it will be a List<GroceryItem> because that's what we're returning from _loadItems()
+          // when no error occurs.
+          List<GroceryItem> data = snapshot.data!;
+
+          // // 👇 a workaround from Lecture 232 comments.
+          // _groceryItems = snapshot.data!;
+
+          return ListView.builder(
+            // itemCount: _groceryItems.length,
+            itemCount: data.length,
+            itemBuilder: (ctx, index) {
+              // final item = _groceryItems[index];
+              final item = data[index];
+              return Dismissible(
+                onDismissed: (direction) {
+                  // _removeItem(_groceryItems[index]);
+                  _removeItem(data[index]);
+                },
+                background: Container(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+                key: ValueKey(item.id),
+                child: ListTile(
+                  leading: Container(
+                    width: 24,
+                    height: 24,
+                    color: item.category.color,
+                  ),
+                  title: Text(item.name),
+                  trailing: Text(
+                    item.quantity.toString(),
+                    style: const TextStyle(
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }
